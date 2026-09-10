@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tra Cứu Thông Tin Doanh Nghiệp</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 3px solid #ffffff;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+        }
+        .spinner-blue {
+            border: 3px solid rgba(59, 130, 246, 0.3);
+            border-top: 3px solid #3b82f6;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .table-container::-webkit-scrollbar { width: 6px; height: 6px; }
+        .table-container::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
+        .table-container::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .table-container::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .focus-ring:focus-within { box-shadow: 0 0 0 2px #3b82f6; border-color: #3b82f6; }
+        .highlight { background-color: #fef08a; font-weight: bold; padding: 0 2px; border-radius: 2px; color: #b45309; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+    <header class="bg-gradient-to-r from-blue-900 to-blue-700 text-white shadow-lg border-b-4 border-yellow-500">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row justify-between items-center">
+            <div class="flex items-center space-x-4 mb-4 sm:mb-0">
+                <div class="w-16 h-16 bg-white rounded-full flex items-center justify-center p-0.5 shadow-md overflow-hidden relative border-2 border-yellow-400">
+                    <img id="app-logo" src="https://placehold.co/150x150/ffffff/1e3a8a?text=LOGO" alt="Logo Cơ Quan" class="w-full h-full object-cover rounded-full">
+                </div>
+                <div>
+                    <h1 class="text-xl sm:text-2xl font-bold tracking-wide uppercase text-yellow-400">Hệ Thống Tra Cứu</h1>
+                    <p class="text-sm text-blue-100 opacity-90">Thông tin Doanh Nghiệp</p>
+                </div>
+            </div>
+            
+            <div class="flex items-center space-x-3 relative" id="header-right-section">
+                <div class="flex items-center bg-blue-800/50 rounded-lg p-2.5 border border-blue-600/50 backdrop-blur-sm hidden sm:flex">
+                    <div class="text-sm flex items-center">
+                        <i class="fa-solid fa-server text-green-400 mr-2"></i>
+                        <span class="text-blue-100">Dữ liệu API: </span>
+                        <span id="db-count" class="font-bold text-yellow-400 text-base ml-1">Đang tải...</span>
+                    </div>
+                </div>
+                
+                <button id="toggle-import-btn" class="bg-green-600 hover:bg-green-500 text-white px-4 py-2.5 rounded-lg shadow-md transition-colors flex items-center text-sm font-bold border border-green-400 focus:outline-none focus:ring-2 focus:ring-green-400">
+                    <i class="fa-solid fa-cloud-arrow-down mr-2"></i> <span class="hidden sm:inline">Làm mới dữ liệu</span><span class="sm:hidden">Làm mới</span>
+                </button>
+                
+                <!-- BỔ SUNG: Tính năng chọn file từ máy tính -->
+                <input type="file" id="local-file-input" accept=".csv" class="hidden">
+                <button id="upload-local-btn" class="bg-yellow-500 hover:bg-yellow-400 text-blue-900 px-4 py-2.5 rounded-lg shadow-md transition-colors flex items-center text-sm font-bold border border-yellow-300 focus:outline-none focus:ring-2 focus:ring-yellow-400 ml-2">
+                    <i class="fa-solid fa-folder-open mr-2"></i> <span class="hidden sm:inline">Mở file máy tính</span><span class="sm:hidden">Mở File</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-[98%] mx-auto py-8 flex-grow w-full space-y-6">
+        <div class="sm:hidden flex items-center justify-center bg-blue-50 rounded-lg p-2.5 border border-blue-100 shadow-sm">
+            <div class="text-sm flex items-center">
+                <i class="fa-solid fa-server text-green-500 mr-2"></i>
+                <span class="text-blue-800">Dữ liệu API: </span>
+                <span id="db-count-mobile" class="font-bold text-blue-700 text-base ml-1">Đang tải...</span>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-200 relative overflow-hidden">
+            <div class="absolute top-0 left-0 w-1 h-full bg-blue-500"></div>
+            <form id="search-form" class="flex flex-col md:flex-row gap-4 items-end">
+                <div class="flex-1 w-full">
+                    <label for="mst-input" class="block text-sm font-semibold text-gray-700 mb-2">
+                        <i class="fa-solid fa-barcode text-blue-500 mr-1"></i> Nhập Mã số thuế, CCCD hoặc Tên doanh nghiệp
+                    </label>
+                    <div class="relative rounded-lg focus-ring bg-gray-50 border border-gray-300 transition-all">
+                        <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                            <i class="fa-solid fa-magnifying-glass text-gray-400"></i>
+                        </div>
+                        <input type="text" id="mst-input" name="search_keyword"
+                            class="block w-full pl-11 pr-4 py-3.5 bg-transparent outline-none text-gray-800 font-medium text-lg placeholder-gray-400"
+                            placeholder="Nhập thông tin cần tra cứu..." autocomplete="off" disabled>
+                    </div>
+                </div>
+                <button type="submit" id="submit-btn" name="submit_action" class="w-full md:w-48 flex justify-center items-center py-3.5 px-4 border border-transparent text-base font-bold rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition-all shadow-md active:transform active:scale-95 disabled:bg-gray-400 disabled:cursor-not-allowed">
+                    <span id="btn-text">Tra cứu ngay</span>
+                    <div id="btn-spinner" class="spinner ml-2 hidden"></div>
+                </button>
+            </form>
+            <div id="search-status-message" class="hidden mt-4 text-sm p-3.5 rounded-lg items-center font-medium"></div>
+        </div>
+
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <div class="px-6 py-4 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
+                <h2 class="text-base font-bold text-gray-800 uppercase tracking-wide">
+                    <i class="fa-solid fa-list-check text-blue-600 mr-2"></i> Kết quả tra cứu
+                </h2>
+                <span id="result-count" class="text-sm font-semibold text-blue-600 bg-blue-100 px-3 py-1 rounded-full hidden"></span>
+            </div>
+            
+            <div class="table-container overflow-x-auto h-[500px] relative">
+                <table class="min-w-full divide-y divide-gray-300">
+                    <thead class="bg-gray-100 sticky top-0 z-10 shadow-sm">
+                        <tr>
+                            <th scope="col" class="px-4 py-3.5 text-center text-xs font-bold text-gray-700 uppercase w-12 border-r border-gray-200 whitespace-nowrap">STT</th>
+                            <th scope="col" class="px-4 py-3.5 text-left text-xs font-bold text-gray-700 uppercase border-r border-gray-200 whitespace-nowrap">Mã số thuế</th>
+                            <th scope="col" class="px-4 py-3.5 text-left text-xs font-bold text-gray-700 uppercase border-r border-gray-200 min-w-[200px]">Tên doanh nghiệp</th>
+                            <th scope="col" class="px-4 py-3.5 text-left text-xs font-bold text-gray-700 uppercase border-r border-gray-200 min-w-[160px]">Người ĐD PL</th>
+                            <th scope="col" class="px-4 py-3.5 text-left text-xs font-bold text-gray-700 uppercase border-r border-gray-200 whitespace-nowrap">CCCD</th>
+                            <th scope="col" class="px-4 py-3.5 text-left text-xs font-bold text-gray-700 uppercase border-r border-gray-200 min-w-[220px]">Ngành nghề KD</th>
+                            <th scope="col" class="px-4 py-3.5 text-left text-xs font-bold text-gray-700 uppercase border-r border-gray-200 min-w-[250px]">Địa chỉ KD</th>
+                            <th scope="col" class="px-4 py-3.5 text-left text-xs font-bold text-gray-700 uppercase border-r border-gray-200 whitespace-nowrap min-w-[150px]">Trạng thái MST</th>
+                            <th scope="col" class="px-4 py-3.5 text-left text-xs font-bold text-blue-700 bg-blue-50 uppercase whitespace-nowrap min-w-[150px]">Cán bộ quản lý</th>
+                        </tr>
+                    </thead>
+                    <tbody id="result-body" class="bg-white divide-y divide-gray-200">
+                        <tr id="empty-state">
+                            <td colspan="9" class="px-6 py-16 text-center text-gray-400">
+                                <div class="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-3 border border-gray-100">
+                                    <div class="spinner spinner-blue"></div>
+                                </div>
+                                <p class="text-base font-medium text-gray-600">Đang tải dữ liệu từ máy chủ...</p>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <footer class="bg-gray-800 text-gray-400 py-6 mt-auto">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row justify-between items-center">
+            <div class="mb-4 md:mb-0 text-sm">
+                Dữ liệu được quản lý tập trung qua API/External Storage.
+            </div>
+            <div class="flex items-center">
+                <span class="text-sm mr-2">Phát triển và thiết kế bởi:</span>
+                <span class="text-white font-bold tracking-wide px-3 py-1 bg-gray-700 rounded-lg border border-gray-600">
+                    <i class="fa-solid fa-code text-blue-400 mr-2"></i>Nguyễn Phước Sang
+                </span>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        // ============================================================================
+        // CẤU HÌNH API / NGUỒN DỮ LIỆU
+        // Thay thế URL này bằng đường dẫn tới file CSV/JSON trên server của bạn, 
+        // hoặc link Google Sheets API, Firebase, v.v.
+        // ============================================================================
+        const DATA_API_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ5EKZH5Y8hdRyXj5RmGxKpWZ1NDgIOjdpODk8V4wLBo--rHUOjlwyR62466MkzIthTrgXLGlGzkoag/pub?output=csv"; // Ví dụ minh họa
+        
+        // Biến toàn cục lưu trữ dữ liệu sau khi tải về
+        let globalDatabase = [];
+
+        // DOM Elements
+        const dbCountEl = document.getElementById('db-count');
+        const dbCountMobileEl = document.getElementById('db-count-mobile');
+        const resultBody = document.getElementById('result-body');
+        const searchInput = document.getElementById('mst-input');
+        const searchForm = document.getElementById('search-form');
+        const submitBtn = document.getElementById('submit-btn');
+        const btnText = document.getElementById('btn-text');
+        const btnSpinner = document.getElementById('btn-spinner');
+        const resultCount = document.getElementById('result-count');
+        const emptyStateHTML = document.getElementById('empty-state').outerHTML;
+        const toggleImportBtn = document.getElementById('toggle-import-btn');
+        
+        // Bổ sung biến DOM cho tính năng tải file cục bộ
+        const localFileInput = document.getElementById('local-file-input');
+        const uploadLocalBtn = document.getElementById('upload-local-btn');
+
+        // Dữ liệu dự phòng (Fallback) trong trường hợp API ảo phía trên bị lỗi (để trang web vẫn chạy được)
+        const fallbackCSV = `
+"1600630213","Chưa cập nhật","UBND phường Núi Sam","Chưa cập nhật","Quản lý nhà nước","ấp Vĩnh Tây","Phường Núi Sam","Đang hoạt động",""
+"1600204705","089084017426","DOANH NGHIỆP TN NAM ĐỊNH","Trần Quốc Bảo","Bán buôn nhiên liệu","Tổ 3, Vĩnh Khánh","Phường Vĩnh Tế","Đang hoạt động","Nguyễn Phú Xuân"
+"1600361987","089181000817","UBND Phường Vĩnh Mỹ","LÊ HOÀNG MAI","Quản lý nhà nước","Khóm Mỹ Thành","Phường Châu Đốc","Đang hoạt động","Nguyễn Mỹ Loan"
+"1600888519","089080003344","CÔNG TY TNHH TƯ VẤN THIẾT KẾ LẠC VIỆT","Nguyễn Phước Sang","Hoạt động kiến trúc","Đường số 2","Phường Vĩnh Tế","Đang hoạt động","Nguyễn Thị Tuyết Mai"
+        `.trim();
+
+        // Hàm gọi dữ liệu từ API hoặc Google Sheets
+        async function fetchExternalData() {
+            try {
+                //                resultBody.innerHTML = emptyStateHTML;
+                searchInput.disabled = true;
+
+                // Thêm biến thời gian (t) vào link để ép trình duyệt luôn tải file mới nhất (chống Cache)
+                const fetchUrl = DATA_API_URL + (DATA_API_URL.includes('?') ? '&' : '?') + 't=' + new Date().getTime();
+                
+                console.log("Đang tải dữ liệu từ:", fetchUrl);
+                
+                //                const response = await fetch(fetchUrl);
+                
+                if (!response.ok) {
+                    throw new Error(`Lỗi HTTP! Trạng thái: ${response.status} - Không thể truy cập link.`);
+                }
+                
+                const csvText = await response.text();
+                console.log("Đã tải xong dữ liệu. Bắt đầu phân tích...");
+                processCSVData(csvText);
+                
+            } catch (error) {
+                //                console.error("CHI TIẾT LỖI TẢI DỮ LIỆU:", error);
+                
+                // Hiển thị lỗi trực tiếp lên bảng để dễ nhận biết
+                resultBody.innerHTML = `
+                    <tr>
+                        <td colspan="9" class="px-6 py-16 text-center text-red-500">
+                            <div class="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-3 border border-red-200">
+                                <i class="fa-solid fa-triangle-exclamation text-3xl"></i>
+                            </div>
+                            <p class="text-lg font-bold">Lỗi kết nối dữ liệu!</p>
+                            <p class="text-sm mt-2 font-mono bg-gray-100 inline-block p-2 rounded text-red-700">${error.message}</p>
+                            <p class="text-sm mt-3 text-gray-600">Hệ thống đang hiển thị dữ liệu mẫu để duy trì hoạt động.</p>
+                        </td>
+                    </tr>
+                `;
+                
+                // Tải dữ liệu dự phòng
+                setTimeout(() => processCSVData(fallbackCSV), 2000);
+            }
+        }
+
+        //        // Thuật toán bóc tách CSV chuẩn xác (xử lý tốt các ô trống và dấu phẩy trong chuỗi)
+        function parseCSVLine(text) {
+            let ret = [];
+            let keep = false;
+            let buffer = '';
+            for (let i = 0; i < text.length; i++) {
+                let char = text[i];
+                if (char === '"') {
+                    if (keep && i + 1 < text.length && text[i + 1] === '"') {
+                        buffer += '"'; // Giữ lại dấu ngoặc kép bên trong
+                        i++;
+                    } else {
+                        keep = !keep;
+                    }
+                } else if (char === ',' && !keep) {
+                    ret.push(buffer);
+                    buffer = '';
+                } else {
+                    buffer += char;
+                }
+            }
+            ret.push(buffer);
+            return ret;
+        }
+
+        //        // Hàm xử lý dữ liệu CSV thành Mảng (Array of Objects)
+        function processCSVData(csvString) {
+            // Cắt dòng an toàn cho mọi HĐH (Windows, Mac, Linux)
+            const lines = csvString.split(/\r\n|\n|\r/);
+            globalDatabase = [];
+
+            // Kiểm tra xem dòng 1 có phải là tiêu đề (Header) không để bỏ qua
+            let startIndex = 0;
+            if (lines[0] && (lines[0].toLowerCase().includes('mst') || lines[0].toLowerCase().includes('mã') || lines[0].toLowerCase().includes('thuế'))) {
+                startIndex = 1; 
+            }
+
+            for (let i = startIndex; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) continue;
+                
+                const columns = parseCSVLine(line);
+                
+                // Phải có ít nhất 2 cột mới tính là 1 dòng hợp lệ (tránh dòng trống rác)
+                if (columns && columns.length >= 2) {
+                    globalDatabase.push({
+                        mst: (columns[0] || "").trim(),       // Cột A
+                        cccd: (columns[1] || "").trim(),      // Cột B
+                        name: (columns[2] || "").trim(),      // Cột C
+                        rep: (columns[3] || "").trim(),       // Cột D
+                        industry: (columns[4] || "").trim(),  // Cột E
+                        address: (columns[5] || "").trim(),   // Cột F
+                        ward: (columns[6] || "").trim(),      // Cột G
+                        status: (columns[7] || "").trim(),    // Cột H
+                        manager: (columns[8] || "").trim()    // Cột I
+                    });
+                }
+            }
+
+            console.log(`Đã nạp ${globalDatabase.length} dòng thành công.`);
+
+            //            // Cập nhật giao diện sau khi có dữ liệu
+            const countStr = globalDatabase.length.toLocaleString() + " dòng";
+            dbCountEl.textContent = countStr;
+            dbCountMobileEl.textContent = countStr;
+            
+            // Mở khóa ô tìm kiếm
+            searchInput.disabled = false;
+            searchInput.placeholder = "Nhập MST, CCCD hoặc Tên DN...";
+            
+            // Cập nhật bảng thành trạng thái Sẵn sàng
+            resultBody.innerHTML = `
+                <tr>
+                    <td colspan="9" class="px-6 py-16 text-center text-gray-400">
+                        <div class="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-3 border border-gray-100">
+                            <i class="fa-solid fa-magnifying-glass text-3xl"></i>
+                        </div>
+                        <p class="text-base font-medium text-gray-600">Dữ liệu đã sẵn sàng</p>
+                        <p class="text-sm mt-1">Hệ thống đã tải ${countStr}. Hãy nhập từ khóa để tìm kiếm.</p>
+                    </td>
+                </tr>
+            `;
+        }
+
+        // Hàm tìm kiếm và hiển thị
+        searchForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            const keyword = searchInput.value.trim().toLowerCase();
+            
+            if(!keyword) return;
+
+            // UI Loading state
+            btnText.textContent = "Đang tìm...";
+            btnSpinner.classList.remove('hidden');
+            submitBtn.disabled = true;
+
+            // Giả lập độ trễ tìm kiếm (cho cảm giác mượt mà)
+            setTimeout(() => {
+                const results = globalDatabase.filter(row => 
+                    row.mst.toLowerCase().includes(keyword) || 
+                    row.cccd.toLowerCase().includes(keyword) || 
+                    row.name.toLowerCase().includes(keyword)
+                );
+
+                renderResults(results, keyword);
+
+                // Reset UI
+                btnText.textContent = "Tra cứu ngay";
+                btnSpinner.classList.add('hidden');
+                submitBtn.disabled = false;
+            }, 300);
+        });
+
+        // Hàm render kết quả ra bảng
+        function renderResults(results, keyword) {
+            resultBody.innerHTML = '';
+            
+            if (results.length === 0) {
+                resultCount.classList.add('hidden');
+                resultBody.innerHTML = `
+                    <tr>
+                        <td colspan="9" class="px-6 py-16 text-center text-red-400">
+                            <div class="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-3 border border-red-100">
+                                <i class="fa-regular fa-face-frown text-3xl"></i>
+                            </div>
+                            <p class="text-base font-medium text-red-600">Không tìm thấy kết quả</p>
+                            <p class="text-sm mt-1 text-gray-500">Không có doanh nghiệp nào khớp với từ khóa "${keyword}"</p>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            resultCount.textContent = `Tìm thấy ${results.length} kết quả`;
+            resultCount.classList.remove('hidden');
+
+            // Hàm bôi vàng từ khóa
+            const highlightText = (text, word) => {
+                if (!word || !text) return text;
+                const regex = new RegExp(`(${word})`, "gi");
+                return text.replace(regex, "<span class='highlight'>$1</span>");
+            };
+
+            results.forEach((row, index) => {
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-blue-50 transition-colors duration-150";
+                
+                tr.innerHTML = `
+                    <td class="px-4 py-4 whitespace-nowrap text-center text-sm font-medium text-gray-500 border-r border-gray-200">${index + 1}</td>
+                    <td class="px-4 py-4 whitespace-nowrap text-sm font-bold text-blue-600 border-r border-gray-200">${highlightText(row.mst, keyword)}</td>
+                    <td class="px-4 py-4 text-sm font-semibold text-gray-800 border-r border-gray-200">${highlightText(row.name, keyword)}</td>
+                    <td class="px-4 py-4 text-sm text-gray-700 border-r border-gray-200">${row.rep}</td>
+                    <td class="px-4 py-4 whitespace-nowrap text-sm font-medium text-gray-600 border-r border-gray-200">${highlightText(row.cccd, keyword)}</td>
+                    <td class="px-4 py-4 text-sm text-gray-600 border-r border-gray-200 line-clamp-2">${row.industry}</td>
+                    <td class="px-4 py-4 text-sm text-gray-600 border-r border-gray-200">${row.address} - ${row.ward}</td>
+                    <td class="px-4 py-4 whitespace-nowrap text-sm border-r border-gray-200">
+                        <span class="px-2.5 py-1 rounded-full text-xs font-medium ${row.status.includes('ngừng') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}">
+                            ${row.status}
+                        </span>
+                    </td>
+                    <td class="px-4 py-4 whitespace-nowrap text-sm font-semibold text-blue-700 bg-blue-50/50">${row.manager}</td>
+                `;
+                resultBody.appendChild(tr);
+            });
+        }
+
+        // Sự kiện nút Làm mới dữ liệu
+        toggleImportBtn.addEventListener('click', () => {
+            const icon = toggleImportBtn.querySelector('i');
+            icon.classList.remove('fa-cloud-arrow-down');
+            icon.classList.add('fa-arrows-rotate', 'fa-spin');
+            
+            resultBody.innerHTML = emptyStateHTML; // Trả về UI Đang tải
+            searchInput.disabled = true;
+            resultCount.classList.add('hidden');
+            
+            // Gọi lại API
+            fetchExternalData().then(() => {
+                icon.classList.remove('fa-arrows-rotate', 'fa-spin');
+                icon.classList.add('fa-cloud-arrow-down');
+            });
+        });
+
+        // =========================================================
+        // TÍNH NĂNG MỚI: ĐỌC FILE TRỰC TIẾP TỪ MÁY TÍNH
+        // =========================================================
+        uploadLocalBtn.addEventListener('click', () => {
+            localFileInput.click(); // Kích hoạt ẩn thẻ input file
+        });
+
+        localFileInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            // Chuyển giao diện sang trạng thái chờ
+            resultBody.innerHTML = emptyStateHTML;
+            searchInput.disabled = true;
+            resultCount.classList.add('hidden');
+            document.querySelector('#empty-state p.text-base').textContent = "Đang phân tích file từ máy...";
+
+            // Sử dụng FileReader để đọc dữ liệu file
+            const reader = new FileReader();
+            
+            reader.onload = function(event) {
+                try {
+                    const csvText = event.target.result;
+                    processCSVData(csvText); // Tái sử dụng lại hàm bóc tách có sẵn
+                    
+                    // Hiển thị dải thông báo thành công màu xanh ở đầu bảng
+                    const successTr = document.createElement('tr');
+                    successTr.innerHTML = `
+                        <td colspan="9" class="px-6 py-3 text-center bg-green-50 text-green-700 text-sm font-bold border-b border-green-200 shadow-sm">
+                            <i class="fa-solid fa-check-circle mr-2 text-green-500"></i> Đã hiển thị dữ liệu từ file máy tính: <span class="italic text-gray-700">${file.name}</span>
+                        </td>
+                    `;
+                    resultBody.insertBefore(successTr, resultBody.firstChild);
+                    
+                } catch (err) {
+                    alert("Lỗi khi đọc file CSV: Đảm bảo file được định dạng đúng. Chi tiết: " + err.message);
+                }
+            };
+
+            reader.onerror = function() {
+                alert("Máy tính của bạn đang chặn quyền đọc file này do thiết lập bảo mật.");
+            };
+
+            reader.readAsText(file); // Bắt đầu đọc file dưới dạng văn bản
+            e.target.value = ''; // Reset input để có thể chọn lại cùng 1 file nếu muốn
+        });
+        // =========================================================
+
+        // Bắt đầu tải dữ liệu khi trang vừa mở lên
+        window.onload = function() {
+            fetchExternalData();
+        };
+
+    </script>
+</body>
+</html>
