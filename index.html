@@ -1,543 +1,587 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  UploadCloud, 
-  FileText, 
-  CheckCircle, 
-  AlertTriangle, 
-  XCircle, 
-  ArrowRight, 
-  BarChart2, 
-  Settings, 
-  RefreshCw,
-  Search,
-  ChevronDown
-} from 'lucide-react';
-
-// Dữ liệu mô phỏng sau khi đã được trích xuất (Data Ingestion & Parsing)
-const MOCK_PARSED_DATA = {
-  sskt: { // Sổ sách kế toán
-    tk133_du_no_ck: 55000000,
-    tk511_711_ps_co: 1500000000,
-    tk334_ps_co: 450000000,
-    tk821_ps_no: 300000000,
-  },
-  bctc: { // Báo cáo tài chính
-    ms133: 55000000,
-    ms50_lntt: 1500000000,
-    ms51_thue_tndn: 300000000,
-  },
-  tkt: { // Tờ khai thuế (HTKK)
-    gtgt_43: 55000000,
-    gtgt_doanhthu: 1520000000, // Cố tình làm lệch 20tr để test Rule 3 (Soft Match)
-    tndn_a1: 1500000000,
-    tndn_e: 280000000, // Cố tình làm lệch 20tr để test Rule 5 (Strict Match - Lỗi)
-    tncn_16: 440000000, // Nhỏ hơn quỹ lương 450tr -> Pass Rule 4
-  }
-};
-
-// Định nghĩa các Rules (Rule Engine)
-const RULES_DEFINITION = [
-  {
-    id: 1,
-    code: 'RULE_VAT_01',
-    name: 'Thuế GTGT được khấu trừ',
-    type: 'STRICT',
-    evaluate: (data) => {
-      const { sskt, bctc, tkt } = data;
-      const match = sskt.tk133_du_no_ck === bctc.ms133 && bctc.ms133 === tkt.gtgt_43;
-      const variance = Math.max(sskt.tk133_du_no_ck, bctc.ms133, tkt.gtgt_43) - Math.min(sskt.tk133_du_no_ck, bctc.ms133, tkt.gtgt_43);
-      
-      let msg = 'Hợp lệ: Số dư thuế GTGT khớp hoàn toàn giữa 3 nguồn (Sổ sách, BCTC, Tờ khai).';
-      let taxImpact = 'Không có rủi ro. Đảm bảo chính xác Số thuế GTGT còn được khấu trừ chuyển kỳ sau.';
-      
-      if (!match) {
-        if (sskt.tk133_du_no_ck === bctc.ms133 && bctc.ms133 !== tkt.gtgt_43) {
-            msg = `Sai sót phát hiện tại Tờ khai GTGT: Chỉ tiêu [43] đang lệch ${new Intl.NumberFormat('vi-VN').format(Math.abs(sskt.tk133_du_no_ck - tkt.gtgt_43))} đ so với Sổ sách/BCTC. Vui lòng kiểm tra lại quá trình kết xuất tờ khai.`;
-        } else {
-            msg = `Sai sót: Có sự chênh lệch (lệch tối đa ${new Intl.NumberFormat('vi-VN').format(variance)} đ) giữa Sổ sách, BCTC và Tờ khai GTGT. Yêu cầu rà soát lại toàn bộ.`;
-        }
-        taxImpact = `Chênh lệch làm sai lệch Số thuế GTGT còn được khấu trừ chuyển kỳ sau hoặc Số thuế GTGT phải nộp trong kỳ.`;
-      }
-
-      return {
-        passed: match,
-        status: match ? 'PASSED' : 'FAILED',
-        details: [
-          { label: 'Dư Nợ TK 133 (SSKT)', value: sskt.tk133_du_no_ck },
-          { label: 'Mã số 133 (BCTC)', value: bctc.ms133 },
-          { label: 'Chỉ tiêu [43] (Tờ khai GTGT)', value: tkt.gtgt_43 }
-        ],
-        variance: variance,
-        message: msg,
-        taxImpact: taxImpact
-      };
-    }
-  },
-  {
-    id: 2,
-    code: 'RULE_CIT_01',
-    name: 'Lợi nhuận Kế toán trước thuế',
-    type: 'STRICT',
-    evaluate: (data) => {
-      const { bctc, tkt } = data;
-      const match = bctc.ms50_lntt === tkt.tndn_a1;
-      const variance = Math.abs(bctc.ms50_lntt - tkt.tndn_a1);
-      
-      let msg = match ? 'Hợp lệ: Lợi nhuận Kế toán trước thuế khớp giữa BCTC và Tờ khai QTT TNDN.' : `Sai sót: Lợi nhuận BCTC đang lệch ${new Intl.NumberFormat('vi-VN').format(variance)} đ so với Chỉ tiêu [A1] trên Tờ khai TNDN.`;
-      let taxImpact = match ? 'Không có rủi ro. Cơ sở tính thuế TNDN đồng nhất.' : `Chỉ tiêu [A1] sai lệch dẫn đến sai cơ sở tính thuế. Tác động trực tiếp làm sai Số thuế TNDN phải nộp hoặc nộp thừa trên tờ khai quyết toán năm.`;
-
-      return {
-        passed: match,
-        status: match ? 'PASSED' : 'FAILED',
-        details: [
-          { label: 'Mã số 50 (BCTC)', value: bctc.ms50_lntt },
-          { label: 'Chỉ tiêu [A1] (Tờ khai TNDN)', value: tkt.tndn_a1 }
-        ],
-        variance: variance,
-        message: msg,
-        taxImpact: taxImpact
-      };
-    }
-  },
-  {
-    id: 3,
-    code: 'RULE_REV_01',
-    name: 'Đối chiếu Doanh thu Kế toán & Thuế',
-    type: 'SOFT',
-    evaluate: (data) => {
-      const { sskt, tkt } = data;
-      const variance = Math.abs(sskt.tk511_711_ps_co - tkt.gtgt_doanhthu);
-      const match = variance === 0;
-      
-      let msg = match ? 'Hợp lệ: Doanh thu ghi nhận trên Sổ sách khớp với tổng Tờ khai GTGT.' : `Cảnh báo chênh lệch: Tờ khai GTGT đang ghi nhận mức doanh thu khác Sổ sách là ${new Intl.NumberFormat('vi-VN').format(variance)} đ.`;
-      let taxImpact = match ? 'Không có rủi ro. Doanh thu tính thuế đồng nhất.' : `Rủi ro ghi nhận thiếu/thừa doanh thu, làm phát sinh tăng/giảm Số thuế GTGT và Thuế TNDN phải nộp khi quyết toán.`;
-
-      return {
-        passed: match,
-        status: match ? 'PASSED' : 'WARNING',
-        details: [
-          { label: 'Tổng PS Có TK 511+711 (SSKT)', value: sskt.tk511_711_ps_co },
-          { label: 'Tổng DT Chỉ tiêu 26->32a (TKT)', value: tkt.gtgt_doanhthu }
-        ],
-        variance: variance,
-        message: msg,
-        taxImpact: taxImpact
-      };
-    }
-  },
-  {
-    id: 4,
-    code: 'RULE_PIT_01',
-    name: 'Quỹ lương & Thu nhập chịu thuế TNCN',
-    type: 'LOGICAL',
-    evaluate: (data) => {
-      const { sskt, tkt } = data;
-      const match = sskt.tk334_ps_co >= tkt.tncn_16;
-      const variance = Math.abs(sskt.tk334_ps_co - tkt.tncn_16);
-      
-      let msg = match ? 'Hợp lý logic: Quỹ lương hạch toán (TK 334) lớn hơn hoặc bằng Thu nhập chịu thuế kê khai.' : `Rủi ro cao: Khai báo thu nhập chịu thuế trên tờ khai QTT TNCN đang CAO HƠN quỹ lương hạch toán trên sổ sách với mức chênh lệch ${new Intl.NumberFormat('vi-VN').format(variance)} đ.`;
-      let taxImpact = match ? 'Không có rủi ro. Chi phí tiền lương hợp lý hợp lệ.' : `Rủi ro bị loại trừ chi phí tiền lương (không được trừ khi tính thuế TNDN), làm tăng Số thuế TNDN phải nộp.`;
-
-      return {
-        passed: match,
-        status: match ? 'PASSED' : 'FAILED',
-        details: [
-          { label: 'Tổng PS Có TK 334 (SSKT)', value: sskt.tk334_ps_co },
-          { label: 'Chỉ tiêu [16] (QTT TNCN)', value: tkt.tncn_16 }
-        ],
-        variance: variance,
-        message: msg,
-        taxImpact: taxImpact
-      };
-    }
-  },
-  {
-    id: 5,
-    code: 'RULE_CIT_02',
-    name: 'Chi phí Thuế TNDN',
-    type: 'STRICT',
-    evaluate: (data) => {
-      const { sskt, bctc, tkt } = data;
-      const match = bctc.ms51_thue_tndn === sskt.tk821_ps_no && sskt.tk821_ps_no === tkt.tndn_e;
-      const variance = Math.max(bctc.ms51_thue_tndn, sskt.tk821_ps_no, tkt.tndn_e) - Math.min(bctc.ms51_thue_tndn, sskt.tk821_ps_no, tkt.tndn_e);
-      
-      let msg = 'Hợp lệ: Chi phí thuế TNDN khớp hoàn toàn.';
-      let taxImpact = 'Không có rủi ro. Nghĩa vụ thuế TNDN ghi nhận chính xác.';
-
-      if (!match) {
-        if (bctc.ms51_thue_tndn === sskt.tk821_ps_no && sskt.tk821_ps_no !== tkt.tndn_e) {
-            msg = `Phát hiện sai sót tại Tờ khai TNDN: Chỉ tiêu [E] đang bị lệch ${new Intl.NumberFormat('vi-VN').format(Math.abs(sskt.tk821_ps_no - tkt.tndn_e))} đ so với số liệu ghi nhận trên Sổ sách và BCTC.`;
-        } else {
-            msg = `Sai sót: Có sự chênh lệch chi phí thuế TNDN giữa các báo cáo (mức lệch tối đa ${new Intl.NumberFormat('vi-VN').format(variance)} đ).`;
-        }
-        taxImpact = `Phản ánh sai Số thuế TNDN phải nộp trong năm. Rủi ro nộp thiếu phạt truy thu hoặc đọng vốn do nộp thừa.`;
-      }
-
-      return {
-        passed: match,
-        status: match ? 'PASSED' : 'FAILED',
-        details: [
-          { label: 'Mã số 51 (BCTC)', value: bctc.ms51_thue_tndn },
-          { label: 'PS Nợ TK 821 (SSKT)', value: sskt.tk821_ps_no },
-          { label: 'Chỉ tiêu [E] (Tờ khai TNDN)', value: tkt.tndn_e }
-        ],
-        variance: variance,
-        message: msg,
-        taxImpact: taxImpact
-      };
-    }
-  }
-];
-
-// Helper để format tiền tệ VNĐ
-const formatVND = (value) => {
-  return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(value);
-};
-
-export default function App() {
-  const [currentStep, setCurrentStep] = useState('UPLOAD'); // UPLOAD -> PROCESSING -> DASHBOARD
-  const [processingMsg, setProcessingMsg] = useState('');
-  const [progress, setProgress] = useState(0);
-  const [results, setResults] = useState([]);
-  const [expandedRule, setExpandedRule] = useState(null);
-
-  // Xử lý mô phỏng tiến trình phân tích dữ liệu
-  const startProcessing = () => {
-    setCurrentStep('PROCESSING');
-    setProgress(0);
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hệ Thống Đối Chiếu Kế Toán</title>
     
-    const steps = [
-      { msg: 'Đang khởi tạo Rule Engine...', progress: 10, delay: 500 },
-      { msg: 'Đang đọc và giải mã file XML HTKK...', progress: 35, delay: 1500 },
-      { msg: 'Đang Parse và chuẩn hóa Excel Sổ Sách...', progress: 60, delay: 3000 },
-      { msg: 'Đang trích xuất Báo cáo tài chính (PDF/Excel)...', progress: 85, delay: 4500 },
-      { msg: 'Đang chạy đối chiếu chéo & Tổng hợp kết quả...', progress: 100, delay: 6000 }
-    ];
-
-    steps.forEach((step, index) => {
-      setTimeout(() => {
-        setProcessingMsg(step.msg);
-        setProgress(step.progress);
-        
-        if (index === steps.length - 1) {
-          setTimeout(() => {
-            runRuleEngine();
-            setCurrentStep('DASHBOARD');
-          }, 1000);
-        }
-      }, step.delay);
-    });
-  };
-
-  // Kích hoạt Động cơ đối chiếu
-  const runRuleEngine = () => {
-    const evaluatedResults = RULES_DEFINITION.map(rule => {
-      return {
-        ...rule,
-        result: rule.evaluate(MOCK_PARSED_DATA)
-      };
-    });
-    setResults(evaluatedResults);
-  };
-
-  const renderUploadScreen = () => (
-    <div className="max-w-4xl mx-auto mt-12 animate-fade-in">
-      <div className="text-center mb-10">
-        <h1 className="text-3xl font-bold text-slate-800 mb-3">Tự Động Trích Xuất & Đối Chiếu Kế Toán</h1>
-        <p className="text-slate-500">Tải lên Sổ sách (Excel), Báo cáo tài chính (PDF/XML) và Tờ khai thuế (XML HTKK) để bắt đầu rà soát.</p>
-      </div>
-
-      <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          {/* Sổ sách */}
-          <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 flex flex-col items-center justify-center text-center hover:border-blue-500 hover:bg-blue-50 transition-colors cursor-pointer group">
-            <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-              <FileText className="text-blue-600 w-6 h-6" />
-            </div>
-            <h3 className="font-semibold text-slate-700 mb-1">Sổ Sách Kế Toán</h3>
-            <p className="text-xs text-slate-500">Kéo thả file Excel (Sổ cái, BCĐSPS)</p>
-          </div>
-
-          {/* BCTC */}
-          <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 flex flex-col items-center justify-center text-center hover:border-indigo-500 hover:bg-indigo-50 transition-colors cursor-pointer group">
-            <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-              <BarChart2 className="text-indigo-600 w-6 h-6" />
-            </div>
-            <h3 className="font-semibold text-slate-700 mb-1">Báo Cáo Tài Chính</h3>
-            <p className="text-xs text-slate-500">Kéo thả file XML hoặc PDF</p>
-          </div>
-
-          {/* TKT */}
-          <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 flex flex-col items-center justify-center text-center hover:border-emerald-500 hover:bg-emerald-50 transition-colors cursor-pointer group">
-            <div className="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-              <UploadCloud className="text-emerald-600 w-6 h-6" />
-            </div>
-            <h3 className="font-semibold text-slate-700 mb-1">Tờ Khai Thuế</h3>
-            <p className="text-xs text-slate-500">Tất cả XML kết xuất từ HTKK</p>
-          </div>
-        </div>
-
-        <div className="flex justify-center border-t border-slate-100 pt-8">
-          <button 
-            onClick={startProcessing}
-            className="flex items-center px-8 py-3.5 bg-blue-600 text-white font-medium rounded-xl hover:bg-blue-700 focus:ring-4 focus:ring-blue-100 transition-all transform hover:-translate-y-0.5"
-          >
-            Bắt đầu phân tích & đối chiếu
-            <ArrowRight className="w-5 h-5 ml-2" />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-
-  const renderProcessingScreen = () => (
-    <div className="max-w-2xl mx-auto mt-24 text-center animate-fade-in">
-      <div className="relative w-24 h-24 mx-auto mb-8">
-        <svg className="animate-spin w-full h-full text-blue-100" viewBox="0 0 24 24">
-          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
-          <path className="opacity-75 text-blue-600" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-        </svg>
-        <div className="absolute inset-0 flex items-center justify-center">
-          <Settings className="w-8 h-8 text-blue-600 animate-pulse" />
-        </div>
-      </div>
-      
-      <h2 className="text-2xl font-bold text-slate-800 mb-4">Hệ thống đang xử lý dữ liệu</h2>
-      <p className="text-slate-500 font-medium mb-8 h-6">{processingMsg}</p>
-      
-      <div className="w-full bg-slate-100 rounded-full h-3 mb-2 overflow-hidden border border-slate-200">
-          <div className="text-right text-sm font-semibold text-blue-600">{progress}%</div>
-      </div>
-    </div>
-  );
-
-  const renderDashboardScreen = () => {
-    const passedCount = results.filter(r => r.result.status === 'PASSED').length;
-    const warningCount = results.filter(r => r.result.status === 'WARNING').length;
-    const failedCount = results.filter(r => r.result.status === 'FAILED').length;
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
     
-    const healthScore = Math.round((passedCount / results.length) * 100);
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
 
-    const STATUS_LABELS = { PASSED: 'Hợp Lệ', WARNING: 'Cảnh Báo', FAILED: 'Sai Lệch' };
-    const TYPE_LABELS = { STRICT: 'Tuyệt đối', SOFT: 'Tương đối', LOGICAL: 'Logic' };
-
-    return (
-      <div className="max-w-6xl mx-auto mt-8 pb-12 animate-fade-in">
-        
-        {}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-800">Kết quả đối chiếu kỳ kế toán 2023</h1>
-            <p className="text-slate-500 mt-1">Hoàn tất kiểm tra chéo 3 nguồn dữ liệu: Sổ cái, BCTC, và Tờ khai thuế HTKK.</p>
-          </div>
-          <button 
-            onClick={() => setCurrentStep('UPLOAD')}
-            className="mt-4 md:mt-0 flex items-center px-4 py-2 bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-slate-50 transition-colors"
-          >
-            <RefreshCw className="w-4 h-4 mr-2" />
-            Kiểm tra kỳ khác
-          </button>
-        </div>
-
-        {}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-slate-500 mb-1">Độ tin cậy dữ liệu</p>
-              <h3 className={`text-3xl font-bold ${healthScore === 100 ? 'text-emerald-600' : healthScore >= 80 ? 'text-amber-500' : 'text-rose-600'}`}>
-                {healthScore}%
-              </h3>
-            </div>
-            <div className={`w-12 h-12 rounded-full flex items-center justify-center ${healthScore === 100 ? 'bg-emerald-100' : healthScore >= 80 ? 'bg-amber-100' : 'bg-rose-100'}`}>
-              <BarChart2 className={`w-6 h-6 ${healthScore === 100 ? 'text-emerald-600' : healthScore >= 80 ? 'text-amber-600' : 'text-rose-600'}`} />
-            </div>
-          </div>
-          
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-            <p className="text-sm font-medium text-slate-500 mb-1">Khớp hoàn toàn</p>
-            <div className="flex items-end">
-              <h3 className="text-3xl font-bold text-emerald-600">{passedCount}</h3>
-              <span className="text-slate-400 ml-2 mb-1">/ {results.length} quy tắc</span>
-            </div>
-          </div>
-
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-            <p className="text-sm font-medium text-slate-500 mb-1">Có cảnh báo chênh lệch</p>
-            <div className="flex items-end">
-              <h3 className="text-3xl font-bold text-amber-500">{warningCount}</h3>
-              <span className="text-slate-400 ml-2 mb-1">quy tắc</span>
-            </div>
-          </div>
-
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-            <p className="text-sm font-medium text-slate-500 mb-1">Lỗi / Sai lệch</p>
-            <div className="flex items-end">
-              <h3 className="text-3xl font-bold text-rose-600">{failedCount}</h3>
-              <span className="text-slate-400 ml-2 mb-1">quy tắc</span>
-            </div>
-          </div>
-        </div>
-
-        {}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
-            <h2 className="font-bold text-slate-800">Chi tiết đối chiếu (Bộ quy tắc kế toán)</h2>
-            <div className="relative">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
-              <input type="text" placeholder="Tìm kiếm quy tắc..." className="pl-9 pr-4 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-64" />
-            </div>
-          </div>
-          
-          <div className="divide-y divide-slate-100">
-            {results.map((rule) => {
-              const statusColors = {
-                PASSED: 'text-emerald-600 bg-emerald-50 border-emerald-200',
-                WARNING: 'text-amber-600 bg-amber-50 border-amber-200',
-                FAILED: 'text-rose-600 bg-rose-50 border-rose-200',
-              };
-              const StatusIcon = {
-                PASSED: CheckCircle,
-                WARNING: AlertTriangle,
-                FAILED: XCircle,
-              }[rule.result.status];
-
-              const isExpanded = expandedRule === rule.id;
-
-              return (
-                <div key={rule.id} className="transition-colors hover:bg-slate-50">
-                  {/* Rule Row */}
-                  <div 
-                    className="px-6 py-5 cursor-pointer flex items-center justify-between"
-                    onClick={() => setExpandedRule(isExpanded ? null : rule.id)}
-                  >
-                    <div className="flex items-center space-x-4">
-                      <div className={`p-2 rounded-lg ${statusColors[rule.result.status].split(' ')[1]}`}>
-                        <StatusIcon className={`w-6 h-6 ${statusColors[rule.result.status].split(' ')[0]}`} />
-                      </div>
-                      <div>
-                        <div className="flex items-center space-x-2">
-                          <span className="text-xs font-mono px-2 py-0.5 bg-slate-100 text-slate-600 rounded border border-slate-200">{rule.code}</span>
-                          <h3 className="font-semibold text-slate-800">{rule.name}</h3>
-                        </div>
-                        <p className="text-sm text-slate-500 mt-1">Phương pháp đối chiếu: <span className="font-medium text-slate-700">Khớp {TYPE_LABELS[rule.type]}</span></p>
-                      </div>
-                    </div>
-                    
-                    <div className="flex items-center space-x-6">
-                      {rule.result.variance > 0 && (
-                        <div className="text-right">
-                          <p className="text-xs text-slate-500 mb-0.5">Mức chênh lệch</p>
-                          <p className={`font-mono font-semibold ${rule.result.status === 'FAILED' ? 'text-rose-600' : 'text-amber-600'}`}>
-                            {formatVND(rule.result.variance)}
-                          </p>
-                        </div>
-                      )}
-                      <div className={`px-3 py-1 rounded-full text-xs font-bold border uppercase tracking-wider ${statusColors[rule.result.status]}`}>
-                        {STATUS_LABELS[rule.result.status]}
-                      </div>
-                      <ChevronDown className={`w-5 h-5 text-slate-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
-                    </div>
-                  </div>
-
-                  {}
-                  {isExpanded && (
-                    <div className="px-6 pb-6 pt-2 bg-slate-50 border-t border-slate-100 animate-fade-in">
-                      <div className="bg-white border border-slate-200 rounded-lg p-5">
-                        
-                        {/* Hộp Chẩn Đoán Cụ Thể */}
-                        <div className={`mb-4 p-4 rounded-lg flex items-start space-x-3 text-sm ${
-                          rule.result.status === 'PASSED' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' :
-                          rule.result.status === 'WARNING' ? 'bg-amber-50 text-amber-800 border border-amber-200' : 
-                          'bg-rose-50 text-rose-800 border border-rose-200'
-                        }`}>
-                          <StatusIcon className="w-5 h-5 flex-shrink-0 mt-0.5" />
-                          <div>
-                            <p className="font-bold text-base mb-1">Kết luận đối chiếu:</p>
-                            <p className="text-sm leading-relaxed">{rule.result.message}</p>
-                          </div>
-                        </div>
-
-                        {/* Hộp Đánh Giá Ảnh Hưởng Thuế */}
-                        <div className={`mb-5 p-4 rounded-lg flex items-start space-x-3 text-sm bg-slate-800 text-slate-100 shadow-inner`}>
-                          <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5 text-amber-400" />
-                          <div>
-                            <p className="font-bold text-base mb-1 text-amber-400">Đánh giá rủi ro & Ảnh hưởng Quyết toán Thuế:</p>
-                            <p className="text-sm leading-relaxed font-medium text-slate-200">{rule.result.taxImpact}</p>
-                          </div>
-                        </div>
-
-                        <h4 className="text-sm font-semibold text-slate-700 mb-4 uppercase tracking-wider">Số liệu trích xuất nguyên bản (Không chỉnh sửa)</h4>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                          {rule.result.details.map((detail, idx) => (
-                            <div key={idx} className="bg-slate-50 border border-slate-200 p-4 rounded-lg">
-                              <p className="text-xs text-slate-500 mb-1">{detail.label}</p>
-                              <p className="font-mono font-bold text-slate-800 text-lg">{formatVND(detail.value)}</p>
-                            </div>
-                          ))}
-                        </div>
-                        
-                        <div className="mt-4 flex justify-end">
-                           <button className="text-sm text-blue-600 hover:text-blue-800 font-medium flex items-center">Truy xuất tài liệu gốc (Excel/XML) <ArrowRight className="w-4 h-4 ml-1" /></button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-800">
-      <style dangerouslySetInnerHTML={{__html: `
-        @keyframes shimmer {
-          0% { transform: translateX(-100%); }
-          100% { transform: translateX(100%); }
+    <style>
+        body {
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #f8fafc; /* slate-50 */
+            color: #1e293b; /* slate-800 */
         }
+        
         .animate-fade-in {
-          animation: fadeIn 0.4s ease-out forwards;
+            animation: fadeIn 0.4s ease-out forwards;
         }
+        
         @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(10px); }
-          to { opacity: 1; transform: translateY(0); }
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
         }
-      `}} />
-      
-      {/* Header (Top Navigation) */}
-      <nav className="bg-white border-b border-slate-200 sticky top-0 z-10 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16 items-center">
-            <div className="flex items-center space-x-3">
-              <div className="bg-gradient-to-tr from-blue-600 to-indigo-600 p-2 rounded-lg shadow-md">
-                <CheckCircle className="w-5 h-5 text-white" />
-              </div>
-              <div className="flex flex-col justify-center">
-                <span className="font-bold text-lg tracking-tight text-slate-800 leading-tight">Hệ Thống Đối Chiếu</span>
-                <span className="font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-sm tracking-wide">
-                  Phát triển bởi Nguyễn Phước Sang
-                </span>
-              </div>
-            </div>
-            <div className="flex items-center space-x-4">
-              <div className="text-sm text-slate-500 hidden sm:block">Kỳ Kế Toán: <span className="font-semibold text-slate-700">Năm 2023</span></div>
-              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-slate-100 to-slate-200 border border-slate-300 shadow-inner flex items-center justify-center font-bold text-xs text-slate-600">
-                KT
-              </div>
-            </div>
-          </div>
-        </div>
-      </nav>
 
-      {/* Main Content Area */}
-      <main className="px-4 sm:px-6 lg:px-8">
-        {currentStep === 'UPLOAD' && renderUploadScreen()}
-        {currentStep === 'PROCESSING' && renderProcessingScreen()}
-        {currentStep === 'DASHBOARD' && renderDashboardScreen()}
-      </main>
-    </div>
-  );
-}
+        /* Ẩn các phần tử chưa cần thiết */
+        .hidden-screen {
+            display: none !important;
+        }
+    </style>
+</head>
+<body class="min-h-screen bg-slate-50 font-sans text-slate-800">
+
+    <nav class="bg-white border-b border-slate-200 sticky top-0 z-10 shadow-sm">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center space-x-3">
+                    <div class="bg-gradient-to-tr from-blue-600 to-indigo-600 p-2 rounded-lg shadow-md">
+                        <i data-lucide="check-circle" class="w-5 h-5 text-white"></i>
+                    </div>
+                    <div class="flex flex-col justify-center">
+                        <span class="font-bold text-lg tracking-tight text-slate-800 leading-tight">Hệ Thống Đối Chiếu</span>
+                        <span class="font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-sm tracking-wide">
+                            Phát triển bởi Nguyễn Phước Sang
+                        </span>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <div class="text-sm text-slate-500 hidden sm:block">Kỳ Kế Toán: <span class="font-semibold text-slate-700">Năm 2023</span></div>
+                    <div class="w-8 h-8 rounded-full bg-gradient-to-br from-slate-100 to-slate-200 border border-slate-300 shadow-inner flex items-center justify-center font-bold text-xs text-slate-600">
+                        KT
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="px-4 sm:px-6 lg:px-8 pb-12">
+        
+        <!-- ================= MÀN HÌNH UPLOAD ================= -->
+        <div id="upload-screen" class="max-w-4xl mx-auto mt-12 animate-fade-in">
+            <div class="text-center mb-10">
+                <h1 class="text-3xl font-bold text-slate-800 mb-3">Tự Động Trích Xuất & Đối Chiếu Kế Toán</h1>
+                <p class="text-slate-500">Tải lên Sổ sách (Excel), Báo cáo tài chính (PDF/XML) và Tờ khai thuế (XML HTKK) để bắt đầu rà soát.</p>
+            </div>
+
+            <div class="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                    <!-- Sổ sách -->
+                    <div class="border-2 border-dashed border-slate-300 rounded-xl p-6 flex flex-col items-center justify-center text-center hover:border-blue-500 hover:bg-blue-50 transition-colors cursor-pointer group">
+                        <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                            <i data-lucide="file-text" class="text-blue-600 w-6 h-6"></i>
+                        </div>
+                        <h3 class="font-semibold text-slate-700 mb-1">Sổ Sách Kế Toán</h3>
+                        <p class="text-xs text-slate-500">Kéo thả file Excel (Sổ cái, BCĐSPS)</p>
+                    </div>
+
+                    <!-- BCTC -->
+                    <div class="border-2 border-dashed border-slate-300 rounded-xl p-6 flex flex-col items-center justify-center text-center hover:border-indigo-500 hover:bg-indigo-50 transition-colors cursor-pointer group">
+                        <div class="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                            <i data-lucide="bar-chart-2" class="text-indigo-600 w-6 h-6"></i>
+                        </div>
+                        <h3 class="font-semibold text-slate-700 mb-1">Báo Cáo Tài Chính</h3>
+                        <p class="text-xs text-slate-500">Kéo thả file XML hoặc PDF</p>
+                    </div>
+
+                    <!-- TKT -->
+                    <div class="border-2 border-dashed border-slate-300 rounded-xl p-6 flex flex-col items-center justify-center text-center hover:border-emerald-500 hover:bg-emerald-50 transition-colors cursor-pointer group">
+                        <div class="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                            <i data-lucide="upload-cloud" class="text-emerald-600 w-6 h-6"></i>
+                        </div>
+                        <h3 class="font-semibold text-slate-700 mb-1">Tờ Khai Thuế</h3>
+                        <p class="text-xs text-slate-500">Tất cả XML kết xuất từ HTKK</p>
+                    </div>
+                </div>
+
+                <div class="flex justify-center border-t border-slate-100 pt-8">
+                    <button 
+                        onclick="startProcessing()"
+                        class="flex items-center px-8 py-3.5 bg-blue-600 text-white font-medium rounded-xl hover:bg-blue-700 focus:ring-4 focus:ring-blue-100 transition-all transform hover:-translate-y-0.5"
+                    >
+                        Bắt đầu phân tích & đối chiếu
+                        <i data-lucide="arrow-right" class="w-5 h-5 ml-2"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= MÀN HÌNH PROCESSING ================= -->
+        <div id="processing-screen" class="hidden-screen max-w-2xl mx-auto mt-24 text-center animate-fade-in">
+            <div class="relative w-24 h-24 mx-auto mb-8">
+                <svg class="animate-spin w-full h-full text-blue-100" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>
+                    <path class="opacity-75 text-blue-600" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <div class="absolute inset-0 flex items-center justify-center">
+                    <i data-lucide="settings" class="w-8 h-8 text-blue-600 animate-pulse"></i>
+                </div>
+            </div>
+            
+            <h2 class="text-2xl font-bold text-slate-800 mb-4">Hệ thống đang xử lý dữ liệu</h2>
+            <p id="processing-msg" class="text-slate-500 font-medium mb-8 h-6">Đang khởi tạo Rule Engine...</p>
+            
+            <div class="w-full bg-slate-100 rounded-full h-3 mb-2 overflow-hidden border border-slate-200">
+                <div id="progress-bar-fill" class="bg-blue-600 h-full w-0 transition-all duration-500 ease-out"></div>
+            </div>
+            <div id="progress-text" class="text-right text-sm font-semibold text-blue-600">0%</div>
+        </div>
+
+        <!-- ================= MÀN HÌNH DASHBOARD ================= -->
+        <div id="dashboard-screen" class="hidden-screen max-w-6xl mx-auto mt-8 animate-fade-in">
+            
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8">
+                <div>
+                    <h1 class="text-2xl font-bold text-slate-800">Kết quả đối chiếu kỳ kế toán 2023</h1>
+                    <p class="text-slate-500 mt-1">Hoàn tất kiểm tra chéo 3 nguồn dữ liệu: Sổ cái, BCTC, và Tờ khai thuế HTKK.</p>
+                </div>
+                <button 
+                    onclick="resetApp()"
+                    class="mt-4 md:mt-0 flex items-center px-4 py-2 bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-slate-50 transition-colors"
+                >
+                    <i data-lucide="refresh-cw" class="w-4 h-4 mr-2"></i>
+                    Kiểm tra kỳ khác
+                </button>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex items-center justify-between">
+                    <div>
+                        <p class="text-sm font-medium text-slate-500 mb-1">Độ tin cậy dữ liệu</p>
+                        <h3 id="stat-health" class="text-3xl font-bold text-emerald-600">100%</h3>
+                    </div>
+                    <div id="stat-health-icon-bg" class="w-12 h-12 rounded-full flex items-center justify-center bg-emerald-100">
+                        <i id="stat-health-icon" data-lucide="bar-chart-2" class="w-6 h-6 text-emerald-600"></i>
+                    </div>
+                </div>
+                
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+                    <p class="text-sm font-medium text-slate-500 mb-1">Khớp hoàn toàn</p>
+                    <div class="flex items-end">
+                        <h3 id="stat-passed" class="text-3xl font-bold text-emerald-600">0</h3>
+                        <span id="stat-total" class="text-slate-400 ml-2 mb-1">/ 0 quy tắc</span>
+                    </div>
+                </div>
+
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+                    <p class="text-sm font-medium text-slate-500 mb-1">Có cảnh báo chênh lệch</p>
+                    <div class="flex items-end">
+                        <h3 id="stat-warning" class="text-3xl font-bold text-amber-500">0</h3>
+                        <span class="text-slate-400 ml-2 mb-1">quy tắc</span>
+                    </div>
+                </div>
+
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+                    <p class="text-sm font-medium text-slate-500 mb-1">Lỗi / Sai lệch</p>
+                    <div class="flex items-end">
+                        <h3 id="stat-failed" class="text-3xl font-bold text-rose-600">0</h3>
+                        <span class="text-slate-400 ml-2 mb-1">quy tắc</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <div class="px-6 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+                    <h2 class="font-bold text-slate-800">Chi tiết đối chiếu (Bộ quy tắc kế toán)</h2>
+                    <div class="relative">
+                        <i data-lucide="search" class="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400"></i>
+                        <input type="text" placeholder="Tìm kiếm quy tắc..." class="pl-9 pr-4 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-64" />
+                    </div>
+                </div>
+                
+                <div id="rules-container" class="divide-y divide-slate-100">
+                    <!-- Danh sách Rule được render bằng Javascript vào đây -->
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- ================= JAVASCRIPT LOGIC ================= -->
+    <script>
+        // Dữ liệu mô phỏng sau khi đã được trích xuất
+        const MOCK_PARSED_DATA = {
+            sskt: {
+                tk133_du_no_ck: 55000000,
+                tk511_711_ps_co: 1500000000,
+                tk334_ps_co: 450000000,
+                tk821_ps_no: 300000000,
+            },
+            bctc: {
+                ms133: 55000000,
+                ms50_lntt: 1500000000,
+                ms51_thue_tndn: 300000000,
+            },
+            tkt: {
+                gtgt_43: 55000000,
+                gtgt_doanhthu: 1520000000,
+                tndn_a1: 1500000000,
+                tndn_e: 280000000,
+                tncn_16: 440000000,
+            }
+        };
+
+        // Format VNĐ Helper
+        const formatVND = (value) => {
+            return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(value);
+        };
+
+        const RULES_DEFINITION = [
+            {
+                id: 1,
+                code: 'RULE_VAT_01',
+                name: 'Thuế GTGT được khấu trừ',
+                type: 'STRICT',
+                evaluate: (data) => {
+                    const { sskt, bctc, tkt } = data;
+                    const match = sskt.tk133_du_no_ck === bctc.ms133 && bctc.ms133 === tkt.gtgt_43;
+                    const variance = Math.max(sskt.tk133_du_no_ck, bctc.ms133, tkt.gtgt_43) - Math.min(sskt.tk133_du_no_ck, bctc.ms133, tkt.gtgt_43);
+                    
+                    let msg = 'Hợp lệ: Số dư thuế GTGT khớp hoàn toàn giữa 3 nguồn (Sổ sách, BCTC, Tờ khai).';
+                    let taxImpact = 'Không có rủi ro. Đảm bảo chính xác Số thuế GTGT còn được khấu trừ chuyển kỳ sau.';
+                    
+                    if (!match) {
+                        msg = `Sai sót: Có sự chênh lệch (lệch tối đa ${new Intl.NumberFormat('vi-VN').format(variance)} đ) giữa Sổ sách, BCTC và Tờ khai GTGT. Yêu cầu rà soát lại toàn bộ.`;
+                        taxImpact = `Chênh lệch làm sai Số thuế GTGT còn được khấu trừ. Nguy cơ bị phạt truy thu nếu đã đề nghị hoàn thuế.`;
+                    }
+                    return {
+                        passed: match, status: match ? 'PASSED' : 'FAILED', variance: variance, message: msg, taxImpact: taxImpact,
+                        details: [
+                            { label: 'Dư Nợ TK 133 (SSKT)', value: sskt.tk133_du_no_ck },
+                            { label: 'Mã số 133 (BCTC)', value: bctc.ms133 },
+                            { label: 'Chỉ tiêu [43] (Tờ khai GTGT)', value: tkt.gtgt_43 }
+                        ]
+                    };
+                }
+            },
+            {
+                id: 2,
+                code: 'RULE_CIT_01',
+                name: 'Lợi nhuận Kế toán trước thuế',
+                type: 'STRICT',
+                evaluate: (data) => {
+                    const { bctc, tkt } = data;
+                    const match = bctc.ms50_lntt === tkt.tndn_a1;
+                    const variance = Math.abs(bctc.ms50_lntt - tkt.tndn_a1);
+                    
+                    let msg = match ? 'Hợp lệ: Lợi nhuận Kế toán trước thuế khớp giữa BCTC và Tờ khai QTT TNDN.' : `Sai sót: Lợi nhuận BCTC đang lệch ${new Intl.NumberFormat('vi-VN').format(variance)} đ so với Chỉ tiêu [A1] trên Tờ khai TNDN.`;
+                    let taxImpact = match ? 'Không có rủi ro.' : `Sai cơ sở tính thuế TNDN. Dẫn đến tính sai Số thuế TNDN phải nộp trong năm.`;
+                    return {
+                        passed: match, status: match ? 'PASSED' : 'FAILED', variance: variance, message: msg, taxImpact: taxImpact,
+                        details: [
+                            { label: 'Mã số 50 (BCTC)', value: bctc.ms50_lntt },
+                            { label: 'Chỉ tiêu [A1] (Tờ khai TNDN)', value: tkt.tndn_a1 }
+                        ]
+                    };
+                }
+            },
+            {
+                id: 3,
+                code: 'RULE_REV_01',
+                name: 'Đối chiếu Doanh thu Kế toán & Thuế',
+                type: 'SOFT',
+                evaluate: (data) => {
+                    const { sskt, tkt } = data;
+                    const variance = Math.abs(sskt.tk511_711_ps_co - tkt.gtgt_doanhthu);
+                    const match = variance === 0;
+                    
+                    let msg = match ? 'Hợp lệ: Doanh thu ghi nhận trên Sổ sách khớp với tổng Tờ khai GTGT.' : `Cảnh báo chênh lệch: Tờ khai GTGT đang ghi nhận mức doanh thu khác Sổ sách là ${new Intl.NumberFormat('vi-VN').format(variance)} đ.`;
+                    let taxImpact = match ? 'Không có rủi ro.' : `Nguy cơ cơ quan thuế ấn định lại doanh thu tính thuế, truy thu thêm Thuế GTGT và Thuế TNDN tương ứng với phần chênh lệch.`;
+                    return {
+                        passed: match, status: match ? 'PASSED' : 'WARNING', variance: variance, message: msg, taxImpact: taxImpact,
+                        details: [
+                            { label: 'Tổng PS Có TK 511+711 (SSKT)', value: sskt.tk511_711_ps_co },
+                            { label: 'Tổng DT Chỉ tiêu 26->32a (TKT)', value: tkt.gtgt_doanhthu }
+                        ]
+                    };
+                }
+            },
+            {
+                id: 4,
+                code: 'RULE_PIT_01',
+                name: 'Quỹ lương & Thu nhập chịu thuế TNCN',
+                type: 'LOGICAL',
+                evaluate: (data) => {
+                    const { sskt, tkt } = data;
+                    const match = sskt.tk334_ps_co >= tkt.tncn_16;
+                    const variance = Math.abs(sskt.tk334_ps_co - tkt.tncn_16);
+                    
+                    let msg = match ? 'Hợp lý logic: Quỹ lương hạch toán (TK 334) lớn hơn hoặc bằng Thu nhập chịu thuế kê khai.' : `Rủi ro cao: Khai báo thu nhập chịu thuế trên QTT TNCN đang CAO HƠN quỹ lương hạch toán với mức chênh lệch ${new Intl.NumberFormat('vi-VN').format(variance)} đ.`;
+                    let taxImpact = match ? 'Không có rủi ro. Chi phí lương hợp lý.' : `Rủi ro loại trừ chi phí tiền lương (không được trừ khi tính thuế TNDN), làm tăng Số thuế TNDN phải nộp.`;
+                    return {
+                        passed: match, status: match ? 'PASSED' : 'FAILED', variance: variance, message: msg, taxImpact: taxImpact,
+                        details: [
+                            { label: 'Tổng PS Có TK 334 (SSKT)', value: sskt.tk334_ps_co },
+                            { label: 'Chỉ tiêu [16] (QTT TNCN)', value: tkt.tncn_16 }
+                        ]
+                    };
+                }
+            },
+            {
+                id: 5,
+                code: 'RULE_CIT_02',
+                name: 'Chi phí Thuế TNDN',
+                type: 'STRICT',
+                evaluate: (data) => {
+                    const { sskt, bctc, tkt } = data;
+                    const match = bctc.ms51_thue_tndn === sskt.tk821_ps_no && sskt.tk821_ps_no === tkt.tndn_e;
+                    const variance = Math.max(bctc.ms51_thue_tndn, sskt.tk821_ps_no, tkt.tndn_e) - Math.min(bctc.ms51_thue_tndn, sskt.tk821_ps_no, tkt.tndn_e);
+                    
+                    let msg = 'Hợp lệ: Chi phí thuế TNDN khớp hoàn toàn.';
+                    let taxImpact = 'Không có rủi ro. Nghĩa vụ thuế TNDN ghi nhận chính xác.';
+                    
+                    if (!match) {
+                        if (bctc.ms51_thue_tndn === sskt.tk821_ps_no && sskt.tk821_ps_no !== tkt.tndn_e) {
+                            msg = `Phát hiện sai sót tại Tờ khai TNDN: Chỉ tiêu [E] đang bị lệch ${new Intl.NumberFormat('vi-VN').format(Math.abs(sskt.tk821_ps_no - tkt.tndn_e))} đ so với số liệu ghi nhận trên Sổ sách và BCTC.`;
+                        } else {
+                            msg = `Sai sót: Có sự chênh lệch chi phí thuế TNDN giữa các báo cáo (mức lệch ${new Intl.NumberFormat('vi-VN').format(variance)} đ).`;
+                        }
+                        taxImpact = `Phản ánh sai Số thuế TNDN phải nộp trong kỳ. Rủi ro nộp thiếu phạt truy thu (cộng tiền chậm nộp) hoặc đọng vốn doanh nghiệp do nộp thừa.`;
+                    }
+                    return {
+                        passed: match, status: match ? 'PASSED' : 'FAILED', variance: variance, message: msg, taxImpact: taxImpact,
+                        details: [
+                            { label: 'Mã số 51 (BCTC)', value: bctc.ms51_thue_tndn },
+                            { label: 'PS Nợ TK 821 (SSKT)', value: sskt.tk821_ps_no },
+                            { label: 'Chỉ tiêu [E] (Tờ khai TNDN)', value: tkt.tndn_e }
+                        ]
+                    };
+                }
+            }
+        ];
+
+        function startProcessing() {
+            // Thay đổi giao diện
+            document.getElementById('upload-screen').classList.add('hidden-screen');
+            document.getElementById('processing-screen').classList.remove('hidden-screen');
+            
+            const steps = [
+                { msg: 'Đang khởi tạo Rule Engine...', progress: 10, delay: 500 },
+                { msg: 'Đang đọc và giải mã file XML HTKK...', progress: 35, delay: 1500 },
+                { msg: 'Đang Parse và chuẩn hóa Excel Sổ Sách...', progress: 60, delay: 3000 },
+                { msg: 'Đang trích xuất Báo cáo tài chính (PDF/Excel)...', progress: 85, delay: 4500 },
+                { msg: 'Đang chạy đối chiếu chéo & Tổng hợp kết quả...', progress: 100, delay: 6000 }
+            ];
+
+            const pMsg = document.getElementById('processing-msg');
+            const pBar = document.getElementById('progress-bar-fill');
+            const pText = document.getElementById('progress-text');
+
+            steps.forEach((step, index) => {
+                setTimeout(() => {
+                    pMsg.innerText = step.msg;
+                    pBar.style.width = step.progress + '%';
+                    pText.innerText = step.progress + '%';
+                    
+                    // Chuyển sang Dashboard khi xong
+                    if (index === steps.length - 1) {
+                        setTimeout(() => {
+                            runRuleEngine();
+                        }, 800);
+                    }
+                }, step.delay);
+            });
+        }
+
+        function runRuleEngine() {
+            const evaluatedResults = RULES_DEFINITION.map(rule => {
+                return {
+                    ...rule,
+                    result: rule.evaluate(MOCK_PARSED_DATA)
+                };
+            });
+            
+            renderDashboard(evaluatedResults);
+        }
+
+        function renderDashboard(results) {
+            // Chuyển màn hình
+            document.getElementById('processing-screen').classList.add('hidden-screen');
+            document.getElementById('dashboard-screen').classList.remove('hidden-screen');
+            
+            // Tính toán Stats
+            const passedCount = results.filter(r => r.result.status === 'PASSED').length;
+            const warningCount = results.filter(r => r.result.status === 'WARNING').length;
+            const failedCount = results.filter(r => r.result.status === 'FAILED').length;
+            const healthScore = Math.round((passedCount / results.length) * 100);
+
+            // Cập nhật giao diện Stats
+            const healthElem = document.getElementById('stat-health');
+            const healthIcon = document.getElementById('stat-health-icon');
+            const healthBg = document.getElementById('stat-health-icon-bg');
+            
+            healthElem.innerText = healthScore + '%';
+            if(healthScore === 100) {
+                healthElem.className = 'text-3xl font-bold text-emerald-600';
+                healthIcon.className = 'w-6 h-6 text-emerald-600';
+                healthBg.className = 'w-12 h-12 rounded-full flex items-center justify-center bg-emerald-100';
+            } else if(healthScore >= 80) {
+                healthElem.className = 'text-3xl font-bold text-amber-500';
+                healthIcon.className = 'w-6 h-6 text-amber-600';
+                healthBg.className = 'w-12 h-12 rounded-full flex items-center justify-center bg-amber-100';
+            } else {
+                healthElem.className = 'text-3xl font-bold text-rose-600';
+                healthIcon.className = 'w-6 h-6 text-rose-600';
+                healthBg.className = 'w-12 h-12 rounded-full flex items-center justify-center bg-rose-100';
+            }
+
+            document.getElementById('stat-passed').innerText = passedCount;
+            document.getElementById('stat-total').innerText = '/ ' + results.length + ' quy tắc';
+            document.getElementById('stat-warning').innerText = warningCount;
+            document.getElementById('stat-failed').innerText = failedCount;
+
+            // Render Danh sách Rules
+            const container = document.getElementById('rules-container');
+            const STATUS_LABELS = { PASSED: 'Hợp Lệ', WARNING: 'Cảnh Báo', FAILED: 'Sai Lệch' };
+            const TYPE_LABELS = { STRICT: 'Tuyệt đối', SOFT: 'Tương đối', LOGICAL: 'Logic' };
+            
+            let htmlContent = '';
+
+            results.forEach(rule => {
+                const statusStr = rule.result.status;
+                let bgColors = '';
+                let iconName = '';
+                let textColors = '';
+
+                if(statusStr === 'PASSED') {
+                    textColors = 'text-emerald-600';
+                    bgColors = 'bg-emerald-50 border-emerald-200';
+                    iconName = 'check-circle';
+                } else if(statusStr === 'WARNING') {
+                    textColors = 'text-amber-600';
+                    bgColors = 'bg-amber-50 border-amber-200';
+                    iconName = 'alert-triangle';
+                } else {
+                    textColors = 'text-rose-600';
+                    bgColors = 'bg-rose-50 border-rose-200';
+                    iconName = 'x-circle';
+                }
+
+                const varAmount = rule.result.variance > 0 ? 
+                    `<div class="text-right">
+                        <p class="text-xs text-slate-500 mb-0.5">Mức chênh lệch</p>
+                        <p class="font-mono font-semibold ${statusStr === 'FAILED' ? 'text-rose-600' : 'text-amber-600'}">
+                            ${formatVND(rule.result.variance)}
+                        </p>
+                    </div>` : '';
+
+                let detailsHtml = '';
+                rule.result.details.forEach(d => {
+                    detailsHtml += `
+                        <div class="bg-slate-50 border border-slate-200 p-4 rounded-lg">
+                            <p class="text-xs text-slate-500 mb-1">${d.label}</p>
+                            <p class="font-mono font-bold text-slate-800 text-lg">${formatVND(d.value)}</p>
+                        </div>
+                    `;
+                });
+
+                htmlContent += `
+                <div class="transition-colors hover:bg-slate-50">
+                    <div class="px-6 py-5 cursor-pointer flex items-center justify-between" onclick="toggleRule(${rule.id})">
+                        <div class="flex items-center space-x-4">
+                            <div class="p-2 rounded-lg ${bgColors}">
+                                <i data-lucide="${iconName}" class="w-6 h-6 ${textColors}"></i>
+                            </div>
+                            <div>
+                                <div class="flex items-center space-x-2">
+                                    <span class="text-xs font-mono px-2 py-0.5 bg-slate-100 text-slate-600 rounded border border-slate-200">${rule.code}</span>
+                                    <h3 class="font-semibold text-slate-800">${rule.name}</h3>
+                                </div>
+                                <p class="text-sm text-slate-500 mt-1">Phương pháp đối chiếu: <span class="font-medium text-slate-700">Khớp ${TYPE_LABELS[rule.type]}</span></p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-center space-x-6">
+                            ${varAmount}
+                            <div class="px-3 py-1 rounded-full text-xs font-bold border uppercase tracking-wider ${textColors} ${bgColors}">
+                                ${STATUS_LABELS[statusStr]}
+                            </div>
+                            <i id="chevron-${rule.id}" data-lucide="chevron-down" class="w-5 h-5 text-slate-400 transition-transform"></i>
+                        </div>
+                    </div>
+
+                    <!-- Panel Chi Tiết Ẩn -->
+                    <div id="rule-detail-${rule.id}" class="hidden-screen px-6 pb-6 pt-2 bg-slate-50 border-t border-slate-100 animate-fade-in">
+                        <div class="bg-white border border-slate-200 rounded-lg p-5">
+                            
+                            <!-- Box Kết Luận -->
+                            <div class="mb-4 p-4 rounded-lg flex items-start space-x-3 text-sm border ${
+                                statusStr === 'PASSED' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
+                                statusStr === 'WARNING' ? 'bg-amber-50 text-amber-800 border-amber-200' : 
+                                'bg-rose-50 text-rose-800 border-rose-200'
+                            }">
+                                <i data-lucide="${iconName}" class="w-5 h-5 flex-shrink-0 mt-0.5"></i>
+                                <div>
+                                    <p class="font-bold text-base mb-1">Kết luận đối chiếu:</p>
+                                    <p class="text-sm leading-relaxed">${rule.result.message}</p>
+                                </div>
+                            </div>
+
+                            <!-- Box Rủi Ro -->
+                            <div class="mb-5 p-4 rounded-lg flex items-start space-x-3 text-sm bg-slate-800 text-slate-100 shadow-inner">
+                                <i data-lucide="alert-triangle" class="w-5 h-5 flex-shrink-0 mt-0.5 text-amber-400"></i>
+                                <div>
+                                    <p class="font-bold text-base mb-1 text-amber-400">Đánh giá rủi ro & Tác động Quyết toán Thuế:</p>
+                                    <p class="text-sm leading-relaxed font-medium text-slate-200">${rule.result.taxImpact}</p>
+                                </div>
+                            </div>
+
+                            <h4 class="text-sm font-semibold text-slate-700 mb-4 uppercase tracking-wider">Số liệu trích xuất nguyên bản (Không chỉnh sửa)</h4>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                                ${detailsHtml}
+                            </div>
+                            
+                            <div class="mt-4 flex justify-end">
+                               <button class="text-sm text-blue-600 hover:text-blue-800 font-medium flex items-center">
+                                    Truy xuất tài liệu gốc (Excel/XML) <i data-lucide="arrow-right" class="w-4 h-4 ml-1"></i>
+                               </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                `;
+            });
+
+            container.innerHTML = htmlContent;
+            
+            // Render lại Icon cho các phần tử HTML vừa được tiêm vào
+            lucide.createIcons();
+        }
+
+        function toggleRule(id) {
+            const detailDiv = document.getElementById(`rule-detail-${id}`);
+            const chevron = document.getElementById(`chevron-${id}`);
+            
+            if (detailDiv.classList.contains('hidden-screen')) {
+                // Mở
+                detailDiv.classList.remove('hidden-screen');
+                chevron.classList.add('rotate-180');
+            } else {
+                // Đóng
+                detailDiv.classList.add('hidden-screen');
+                chevron.classList.remove('rotate-180');
+            }
+        }
+
+        // Làm mới ứng dụng (Trở về trang upload)
+        function resetApp() {
+            document.getElementById('dashboard-screen').classList.add('hidden-screen');
+            document.getElementById('upload-screen').classList.remove('hidden-screen');
+            
+            // Reset Progress bar về 0
+            document.getElementById('progress-bar-fill').style.width = '0%';
+            document.getElementById('progress-text').innerText = '0%';
+            document.getElementById('processing-msg').innerText = '';
+        }
+
+        // Khởi tạo Icon Lucide lúc load trang
+        document.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+        });
+    </script>
+</body>
+</html>
