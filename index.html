@@ -53,58 +53,9 @@
             step: 'UPLOAD', // Các bước: UPLOAD, MAPPING, PROCESSING, DASHBOARD
             regulation: 'NEW', // OLD (200/133) hoặc NEW (99/58)
             expandedRuleId: null,
-            files: { sskt: [], bctc: [], tkt: [], tmbctc: [] }
+            files: { sskt: [], bctc: [], tkt: [], tmbctc: [] },
+            results: [] // Chứa kết quả đối chiếu chính thức (Dữ liệu trắng)
         };
-
-        // --- MOCK DATA KẾT QUẢ ĐỐI CHIẾU ---
-        const RECONCILIATION_RESULTS = [
-            {
-                id: 1, 
-                code: 'RULE_VAT_01', 
-                name: 'Đối chiếu Thuế GTGT được khấu trừ', 
-                status: 'PASSED',
-                msg: 'Khớp hoàn toàn. Đảm bảo chính xác Số dư Nợ TK 133 và Chỉ tiêu [43] trên Tờ khai.',
-                taxImpact: 'Không có rủi ro. Số thuế GTGT còn được khấu trừ chuyển kỳ sau đã khớp đúng giữa Sổ sách và Tờ khai, không cần điều chỉnh.',
-                details: { sskt: 55000000, bctc: 55000000, tkt: 55000000 }
-            },
-            {
-                id: 2, 
-                code: 'RULE_REV_01', 
-                name: 'Kiểm soát chênh lệch Doanh thu', 
-                status: 'WARNING',
-                msg: 'Phát hiện chênh lệch: Tờ khai GTGT ghi nhận doanh thu thấp hơn Sổ sách (TK 511 + 711).',
-                taxImpact: 'Rủi ro bị ấn định doanh thu tính thuế. Yêu cầu kiểm tra hóa đơn và lập Tờ khai GTGT bổ sung: Điều chỉnh TĂNG các Chỉ tiêu [26] đến [32a] trên Tờ khai tương ứng để khớp với số phát sinh Có TK 511, 711 trên Sổ cái.',
-                details: { sskt: 1520000000, bctc: 1520000000, tkt: 1500000000 },
-                drilldown: [
-                    { invoice: 'HD-001239', date: '15/04', customer: 'Công ty CP Xây Dựng Bình Minh', amount: 12000000, issue: 'Có trên Sổ Cái, thiếu trên Phụ lục Bán ra' },
-                    { invoice: 'HD-001245', date: '28/04', customer: 'Cửa hàng VLXD Số 1', amount: 8000000, issue: 'Có trên Sổ Cái, thiếu trên Phụ lục Bán ra' }
-                ]
-            },
-            {
-                id: 3, 
-                code: 'RULE_CIT_02', 
-                name: 'Đối chiếu Chi phí Thuế TNDN', 
-                status: 'FAILED',
-                msg: 'Sai lệch nghiêm trọng: Chỉ tiêu [E] (Tờ khai) không khớp với Số phát sinh TK 821.',
-                taxImpact: 'Phản ánh sai Số thuế TNDN phải nộp. Yêu cầu lập Tờ khai bổ sung (Mẫu 03/TNDN): Điều chỉnh lại Chỉ tiêu [E] (Thuế TNDN phải nộp) hoặc [G] (Thuế TNDN nộp thừa) cho khớp đúng với số phát sinh Nợ TK 821 trên Sổ sách.',
-                details: { sskt: 300000000, bctc: 300000000, tkt: 280000000 },
-                drilldown: [
-                    { invoice: 'PKT-TNDN-Q1', date: '31/03', customer: 'Nộp Thuế TNDN', amount: 20000000, issue: 'Kế toán hạch toán bổ sung nhưng chưa làm tờ khai điều chỉnh HTKK' }
-                ]
-            },
-            {
-                id: 4, 
-                code: 'RULE_AI_01', 
-                name: 'Bóc tách Chi phí không được trừ (B4)', 
-                status: 'WARNING',
-                msg: 'AI phát hiện các khoản phạt vi phạm hợp đồng trong Thuyết minh BCTC chưa được loại trừ.',
-                taxImpact: 'Rủi ro truy thu Thuế TNDN do ghi nhận chi phí không hợp lệ. Cần điều chỉnh ngay: Cộng khoản chi phí vi phạm này vào Chỉ tiêu [B4] (Các khoản chi không được trừ) trên Tờ khai Quyết toán TNDN (Mẫu 03/TNDN).',
-                details: { sskt: 0, bctc: 15000000, tkt: 0 },
-                drilldown: [
-                    { invoice: 'TMBCTC_Muc_VII', date: '31/12', customer: 'Chi phí khác', amount: 15000000, issue: 'Thuyết minh ghi "Chi phí phạt vi phạm giao thông" nhưng Chỉ tiêu B4 = 0' }
-                ]
-            }
-        ];
 
         // --- TIỆN ÍCH ---
         const formatVND = (val) => val != null ? new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(val) : 'N/A';
@@ -273,10 +224,12 @@
 
         // 4. Giao diện Kết quả (Dashboard)
         function viewDashboard() {
-            const passed = RECONCILIATION_RESULTS.filter(r => r.status === 'PASSED').length;
-            const warnings = RECONCILIATION_RESULTS.filter(r => r.status === 'WARNING').length;
-            const failed = RECONCILIATION_RESULTS.filter(r => r.status === 'FAILED').length;
-            const healthScore = Math.round((passed / RECONCILIATION_RESULTS.length) * 100);
+            const passed = state.results.filter(r => r.status === 'PASSED').length;
+            const warnings = state.results.filter(r => r.status === 'WARNING').length;
+            const failed = state.results.filter(r => r.status === 'FAILED').length;
+            const skipped = state.results.filter(r => r.status === 'SKIPPED').length;
+            const totalActive = state.results.length - skipped;
+            const healthScore = totalActive > 0 ? Math.round((passed / totalActive) * 100) : 100;
 
             return `
             <div class="max-w-6xl mx-auto mt-8 animate-fade-in">
@@ -319,7 +272,7 @@
                 <!-- Danh sách Rule -->
                 <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
                     <div class="divide-y divide-slate-100">
-                        ${RECONCILIATION_RESULTS.map(rule => renderRuleRow(rule)).join('')}
+                        ${state.results.map(rule => renderRuleRow(rule)).join('')}
                     </div>
                 </div>
             </div>`;
@@ -331,12 +284,14 @@
             const styles = {
                 PASSED: { text: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-200', icon: 'check-circle-2', label: 'HỢP LỆ' },
                 WARNING: { text: 'text-amber-500', bg: 'bg-amber-50', border: 'border-amber-200', icon: 'alert-triangle', label: 'CẢNH BÁO' },
-                FAILED: { text: 'text-rose-600', bg: 'bg-rose-50', border: 'border-rose-200', icon: 'x-octagon', label: 'SAI LỆCH' }
+                FAILED: { text: 'text-rose-600', bg: 'bg-rose-50', border: 'border-rose-200', icon: 'x-octagon', label: 'SAI LỆCH' },
+                SKIPPED: { text: 'text-slate-500', bg: 'bg-slate-100', border: 'border-slate-300', icon: 'minus-circle', label: 'BỎ QUA' }
             };
             const s = styles[rule.status];
+            const opacityClass = rule.status === 'SKIPPED' ? 'opacity-75 grayscale-[30%]' : '';
 
             return `
-            <div>
+            <div class="${opacityClass}">
                 <!-- Dòng Tóm tắt -->
                 <div class="px-8 py-5 flex items-center justify-between cursor-pointer hover:bg-slate-50 transition-colors" onclick="updateState('expandedRuleId', ${isExpanded ? null : rule.id})">
                     <div class="flex items-center space-x-5">
@@ -388,7 +343,7 @@
                     <!-- Rủi ro Thuế -->
                     <div class="mb-6 bg-slate-900 text-white p-5 rounded-xl border border-slate-800 shadow-lg flex items-start">
                         <div class="p-2 bg-amber-500/20 rounded-lg mr-4 mt-0.5">
-                            <i data-lucide="shield-alert" class="w-5 h-5 text-amber-400"></i>
+                            <i data-lucide="${rule.status === 'SKIPPED' ? 'info' : 'shield-alert'}" class="w-5 h-5 text-amber-400"></i>
                         </div>
                         <div>
                             <p class="font-bold text-sm text-amber-400 mb-1.5 uppercase tracking-wider">Đánh giá rủi ro & Hướng dẫn điều chỉnh</p>
@@ -397,7 +352,7 @@
                     </div>
 
                     <!-- Truy vết hóa đơn (Drill-down) -->
-                    ${rule.drilldown ? `
+                    ${rule.drilldown && rule.drilldown.length > 0 ? `
                     <div>
                         <h4 class="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-3 flex items-center">
                             <i data-lucide="search-check" class="w-4 h-4 mr-1.5"></i> Phân tích truy vết nguyên nhân (Drill-down)
@@ -460,8 +415,54 @@
 
         function startProcessing() {
             updateState('step', 'PROCESSING');
-            // Giả lập Async Processing tốn thời gian 4 giây
+            
+            // Giả lập Logic Backend trả về Dữ liệu trắng (Sẵn sàng gắn API)
             setTimeout(() => {
+                const hasTMBCTC = state.files.tmbctc.length > 0;
+                
+                state.results = [
+                    {
+                        id: 1, 
+                        code: 'RULE_VAT_01', 
+                        name: 'Đối chiếu Thuế GTGT được khấu trừ', 
+                        status: 'PASSED',
+                        msg: 'Dữ liệu khớp hoàn toàn (0đ). Đảm bảo chính xác Số dư Nợ TK 133 và Chỉ tiêu [43] trên Tờ khai.',
+                        taxImpact: 'Không có rủi ro. Số thuế GTGT còn được khấu trừ chuyển kỳ sau đã khớp đúng giữa Sổ sách và Tờ khai.',
+                        details: { sskt: 0, bctc: 0, tkt: 0 },
+                        drilldown: []
+                    },
+                    {
+                        id: 2, 
+                        code: 'RULE_REV_01', 
+                        name: 'Kiểm soát chênh lệch Doanh thu', 
+                        status: 'PASSED',
+                        msg: 'Dữ liệu khớp hoàn toàn (0đ). Không phát hiện chênh lệch doanh thu giữa Tờ khai và Sổ sách.',
+                        taxImpact: 'Không có rủi ro. Cơ sở tính thuế đồng nhất giữa các báo cáo.',
+                        details: { sskt: 0, bctc: 0, tkt: 0 },
+                        drilldown: []
+                    },
+                    {
+                        id: 3, 
+                        code: 'RULE_CIT_02', 
+                        name: 'Đối chiếu Chi phí Thuế TNDN', 
+                        status: 'PASSED',
+                        msg: 'Dữ liệu khớp hoàn toàn (0đ). Chỉ tiêu [E] (Tờ khai) khớp với Số phát sinh TK 821.',
+                        taxImpact: 'Không có rủi ro. Nghĩa vụ thuế TNDN được phản ánh chính xác.',
+                        details: { sskt: 0, bctc: 0, tkt: 0 },
+                        drilldown: []
+                    },
+                    {
+                        id: 4, 
+                        code: 'RULE_AI_01', 
+                        name: 'Bóc tách Chi phí không được trừ (B4)', 
+                        status: hasTMBCTC ? 'PASSED' : 'SKIPPED',
+                        msg: hasTMBCTC ? 'AI đã bóc tách thành công. Không phát hiện khoản chi phí không hợp lệ nào trong Thuyết minh BCTC.' : 'Chưa có dữ liệu Thuyết minh BCTC. Hệ thống tạm bỏ qua quy tắc đối chiếu này.',
+                        taxImpact: hasTMBCTC ? 'Không có rủi ro truy thu Thuế TNDN do chi phí không hợp lệ.' : 'Không thể đánh giá rủi ro truy thu Thuế TNDN (Chỉ tiêu B4). Vui lòng tải lên Thuyết minh BCTC để AI phân tích.',
+                        details: { sskt: 0, bctc: 0, tkt: 0 },
+                        drilldown: []
+                    }
+                ];
+                
                 updateState('step', 'DASHBOARD');
             }, 4000);
         }
@@ -471,7 +472,8 @@
                 step: 'UPLOAD',
                 regulation: state.regulation, // Giữ lại setting chuẩn mực
                 expandedRuleId: null,
-                files: { sskt: [], bctc: [], tkt: [], tmbctc: [] }
+                files: { sskt: [], bctc: [], tkt: [], tmbctc: [] },
+                results: []
             };
             renderApp();
         }
