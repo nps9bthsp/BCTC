@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hệ thống Đối chiếu Kế toán v3.0 | Phát triển bởi Nguyễn Phước Sang</title>
+    <title>Hệ thống Đối chiếu Kế toán v3.1 | Phát triển bởi Nguyễn Phước Sang</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -38,7 +38,7 @@
                     </div>
                 </div>
                 <div class="hidden md:flex items-center space-x-4">
-                    <span class="text-sm font-medium text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200">Phiên bản 3.0 (Enterprise)</span>
+                    <span class="text-sm font-medium text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200">Phiên bản 3.1 (Enterprise)</span>
                 </div>
             </div>
         </div>
@@ -64,7 +64,7 @@
                 name: 'Đối chiếu Thuế GTGT được khấu trừ', 
                 status: 'PASSED',
                 msg: 'Khớp hoàn toàn. Đảm bảo chính xác Số dư Nợ TK 133 và Chỉ tiêu [43] trên Tờ khai.',
-                taxImpact: 'Không có rủi ro về thuế GTGT. Số thuế chuyển kỳ sau hợp lệ.',
+                taxImpact: 'Không có rủi ro. Số thuế GTGT còn được khấu trừ chuyển kỳ sau đã khớp đúng giữa Sổ sách và Tờ khai, không cần điều chỉnh.',
                 details: { sskt: 55000000, bctc: 55000000, tkt: 55000000 }
             },
             {
@@ -73,7 +73,7 @@
                 name: 'Kiểm soát chênh lệch Doanh thu', 
                 status: 'WARNING',
                 msg: 'Phát hiện chênh lệch: Tờ khai GTGT ghi nhận doanh thu thấp hơn Sổ sách (TK 511 + 711).',
-                taxImpact: 'Rủi ro bị ấn định doanh thu tính thuế, truy thu thuế GTGT và TNDN. Phạt hành vi khai sai và tiền chậm nộp.',
+                taxImpact: 'Rủi ro bị ấn định doanh thu tính thuế. Yêu cầu kiểm tra hóa đơn và lập Tờ khai GTGT bổ sung: Điều chỉnh TĂNG các Chỉ tiêu [26] đến [32a] trên Tờ khai tương ứng để khớp với số phát sinh Có TK 511, 711 trên Sổ cái.',
                 details: { sskt: 1520000000, bctc: 1520000000, tkt: 1500000000 },
                 drilldown: [
                     { invoice: 'HD-001239', date: '15/04', customer: 'Công ty CP Xây Dựng Bình Minh', amount: 12000000, issue: 'Có trên Sổ Cái, thiếu trên Phụ lục Bán ra' },
@@ -86,7 +86,7 @@
                 name: 'Đối chiếu Chi phí Thuế TNDN', 
                 status: 'FAILED',
                 msg: 'Sai lệch nghiêm trọng: Chỉ tiêu [E] (Tờ khai) không khớp với Số phát sinh TK 821.',
-                taxImpact: 'Phản ánh sai Số thuế TNDN phải nộp. Nguy cơ bị phạt vi phạm hành chính 20% trên số thuế khai thiếu.',
+                taxImpact: 'Phản ánh sai Số thuế TNDN phải nộp. Yêu cầu lập Tờ khai bổ sung (Mẫu 03/TNDN): Điều chỉnh lại Chỉ tiêu [E] (Thuế TNDN phải nộp) hoặc [G] (Thuế TNDN nộp thừa) cho khớp đúng với số phát sinh Nợ TK 821 trên Sổ sách.',
                 details: { sskt: 300000000, bctc: 300000000, tkt: 280000000 },
                 drilldown: [
                     { invoice: 'PKT-TNDN-Q1', date: '31/03', customer: 'Nộp Thuế TNDN', amount: 20000000, issue: 'Kế toán hạch toán bổ sung nhưng chưa làm tờ khai điều chỉnh HTKK' }
@@ -98,7 +98,7 @@
                 name: 'Bóc tách Chi phí không được trừ (B4)', 
                 status: 'WARNING',
                 msg: 'AI phát hiện các khoản phạt vi phạm hợp đồng trong Thuyết minh BCTC chưa được loại trừ.',
-                taxImpact: 'Rủi ro tăng Thuế TNDN phải nộp do tính các chi phí không hợp lệ vào chi phí được trừ.',
+                taxImpact: 'Rủi ro truy thu Thuế TNDN do ghi nhận chi phí không hợp lệ. Cần điều chỉnh ngay: Cộng khoản chi phí vi phạm này vào Chỉ tiêu [B4] (Các khoản chi không được trừ) trên Tờ khai Quyết toán TNDN (Mẫu 03/TNDN).',
                 details: { sskt: 0, bctc: 15000000, tkt: 0 },
                 drilldown: [
                     { invoice: 'TMBCTC_Muc_VII', date: '31/12', customer: 'Chi phí khác', amount: 15000000, issue: 'Thuyết minh ghi "Chi phí phạt vi phạm giao thông" nhưng Chỉ tiêu B4 = 0' }
@@ -391,14 +391,14 @@
                             <i data-lucide="shield-alert" class="w-5 h-5 text-amber-400"></i>
                         </div>
                         <div>
-                            <p class="font-bold text-sm text-amber-400 mb-1.5 uppercase tracking-wider">Đánh giá rủi ro Quyết toán Thuế</p>
+                            <p class="font-bold text-sm text-amber-400 mb-1.5 uppercase tracking-wider">Đánh giá rủi ro & Hướng dẫn điều chỉnh</p>
                             <p class="text-sm font-medium text-slate-300 leading-relaxed">${rule.taxImpact}</p>
                         </div>
                     </div>
 
                     <!-- Truy vết hóa đơn (Drill-down) -->
                     ${rule.drilldown ? `
-                    <div class="mb-6">
+                    <div>
                         <h4 class="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-3 flex items-center">
                             <i data-lucide="search-check" class="w-4 h-4 mr-1.5"></i> Phân tích truy vết nguyên nhân (Drill-down)
                         </h4>
@@ -427,39 +427,6 @@
                         </div>
                     </div>
                     ` : ''}
-
-                    <!-- Phân công xử lý (Collaboration) -->
-                    <div class="bg-white border border-indigo-100 rounded-xl p-5 shadow-sm">
-                        <h4 class="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-4 flex items-center">
-                            <i data-lucide="users" class="w-4 h-4 mr-1.5"></i> Luồng làm việc & Phân công xử lý
-                        </h4>
-                        <div class="grid grid-cols-1 md:grid-cols-4 gap-5">
-                            <div class="col-span-1">
-                                <label class="block text-xs font-bold text-slate-500 mb-2 uppercase">Trạng thái</label>
-                                <select class="w-full border border-slate-300 rounded-lg p-2 text-sm font-medium bg-slate-50 focus:ring-2 focus:ring-indigo-500 outline-none">
-                                    <option class="text-rose-600 font-bold">🚨 Cần xử lý gấp</option>
-                                    <option>⏳ Đang rà soát</option>
-                                    <option>✅ Đã nộp tờ khai BS</option>
-                                    <option>👁️ Bỏ qua (Hợp lý)</option>
-                                </select>
-                            </div>
-                            <div class="col-span-1">
-                                <label class="block text-xs font-bold text-slate-500 mb-2 uppercase">Người xử lý</label>
-                                <select class="w-full border border-slate-300 rounded-lg p-2 text-sm font-medium bg-slate-50 focus:ring-2 focus:ring-indigo-500 outline-none">
-                                    <option value="">-- Chỉ định --</option>
-                                    <option>Trần Thị B (Kế toán Thuế)</option>
-                                    <option>Nguyễn Văn C (KT Tổng hợp)</option>
-                                </select>
-                            </div>
-                            <div class="col-span-2">
-                                <label class="block text-xs font-bold text-slate-500 mb-2 uppercase">Chỉ đạo của Kế toán trưởng</label>
-                                <div class="flex shadow-sm rounded-lg">
-                                    <input type="text" placeholder="Ghi chú yêu cầu điều chỉnh..." class="w-full border border-slate-300 rounded-l-lg p-2 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none z-10">
-                                    <button class="bg-slate-800 hover:bg-slate-900 text-white px-5 rounded-r-lg text-sm font-bold transition-colors">Lưu</button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
 
                 </div>
                 ` : ''}
